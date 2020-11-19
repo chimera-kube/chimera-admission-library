@@ -27,8 +27,11 @@ type WebhookCallback func(*admissionv1.AdmissionRequest) (WebhookResponse, error
 type Webhook struct {
 	Rules    []admissionregistrationv1.RuleWithOperations
 	Callback WebhookCallback
-	Path     string
+	Name     string // +optional
+	Path     string // +optional
 }
+
+type WebhookList []Webhook
 
 func internalServerError(w http.ResponseWriter, err error) {
 	w.WriteHeader(http.StatusInternalServerError)
@@ -72,7 +75,48 @@ func performValidation(callback WebhookCallback, w http.ResponseWriter, r *http.
 	w.Write(marshaledAdmissionReview)
 }
 
-func registerAdmissionWebhook(webhookName, admissionValidatePath, callbackHost string, callbackPort int, rules []admissionregistrationv1.RuleWithOperations, caCertificate []byte) error {
+func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionName, callbackHost string, callbackPort int, caBundle []byte) admissionregistrationv1.ValidatingWebhookConfiguration {
+	res := admissionregistrationv1.ValidatingWebhookConfiguration{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: admissionName,
+		},
+		Webhooks: []admissionregistrationv1.ValidatingWebhook{},
+	}
+	sideEffects := admissionregistrationv1.SideEffectClassNone
+	for i, webhook := range webhooks {
+		webhookPath := webhook.Path
+		if webhookPath == "" {
+			webhookPath = generateValidatePath()
+		}
+		admissionCallbackURL := url.URL{
+			Scheme: "https",
+			Host:   net.JoinHostPort(callbackHost, strconv.Itoa(callbackPort)),
+			Path:   webhookPath,
+		}
+		http.HandleFunc(webhookPath, func(w http.ResponseWriter, r *http.Request) {
+			performValidation(webhook.Callback, w, r)
+		})
+		admissionCallback := admissionCallbackURL.String()
+		validatingWebhook := admissionregistrationv1.ValidatingWebhook{
+			Name: webhook.Name,
+			ClientConfig: admissionregistrationv1.WebhookClientConfig{
+				URL:      &admissionCallback,
+				CABundle: caBundle,
+			},
+			Rules:                   webhook.Rules,
+			SideEffects:             &sideEffects,
+			AdmissionReviewVersions: []string{"v1"},
+		}
+		if validatingWebhook.Name == "" {
+			validatingWebhook.Name = fmt.Sprintf("rule-%d", i)
+		}
+		validatingWebhook.Name = fmt.Sprintf("%s.%s", validatingWebhook.Name, admissionName)
+		res.Webhooks = append(res.Webhooks, validatingWebhook)
+	}
+	return res
+}
+
+func registerAdmissionWebhook(admissionName, callbackHost string, callbackPort int, webhooks WebhookList, caCertificate []byte) error {
 	config, err := config.GetConfig()
 	if err != nil {
 		return err
@@ -85,34 +129,11 @@ func registerAdmissionWebhook(webhookName, admissionValidatePath, callbackHost s
 	if err != nil {
 		return err
 	}
-	admissionCallbackURL := url.URL{
-		Scheme: "https",
-		Host:   net.JoinHostPort(callbackHost, strconv.Itoa(callbackPort)),
-		Path:   admissionValidatePath,
-	}
-	admissionCallback := admissionCallbackURL.String()
-	sideEffects := admissionregistrationv1.SideEffectClassNone
-	admissionConfig := admissionregistrationv1.ValidatingWebhookConfiguration{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: webhookName,
-		},
-		Webhooks: []admissionregistrationv1.ValidatingWebhook{
-			{
-				Name: webhookName,
-				ClientConfig: admissionregistrationv1.WebhookClientConfig{
-					URL:      &admissionCallback,
-					CABundle: caBundle,
-				},
-				Rules:                   rules,
-				SideEffects:             &sideEffects,
-				AdmissionReviewVersions: []string{"v1"},
-			},
-		},
-	}
+	admissionConfig := webhooks.asValidatingAdmissionRegistration(admissionName, callbackHost, callbackPort, caBundle)
 	for {
 		err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Delete(
 			context.TODO(),
-			webhookName,
+			admissionName,
 			metav1.DeleteOptions{},
 		)
 		if err != nil {
@@ -131,11 +152,11 @@ func registerAdmissionWebhook(webhookName, admissionValidatePath, callbackHost s
 	return nil
 }
 
-func generateAdmissionValidatePath() string {
+func generateValidatePath() string {
 	return fmt.Sprintf("/validate-%s", uuid.New().String())
 }
 
-func StartServer(webhookName, callbackHost string, callbackPort int, webhooks []Webhook) error {
+func StartServer(admissionName, callbackHost string, callbackPort int, webhooks WebhookList) error {
 	caCert, CAPrivateKey, err := generateCA()
 	if err != nil {
 		return errors.Errorf("failed to generate CA certificate: %v", err)
@@ -144,17 +165,8 @@ func StartServer(webhookName, callbackHost string, callbackPort int, webhooks []
 	if err != nil {
 		return errors.Errorf("failed to generate serving certificate: %v", err)
 	}
-	for _, webhook := range webhooks {
-		admissionValidatePath := webhook.Path
-		if admissionValidatePath == "" {
-			admissionValidatePath = generateAdmissionValidatePath()
-		}
-		if err := registerAdmissionWebhook(webhookName, admissionValidatePath, callbackHost, callbackPort, webhook.Rules, caCert); err != nil {
-			return errors.Errorf("failed to register admission webhook: %v", err)
-		}
-		http.HandleFunc(admissionValidatePath, func(w http.ResponseWriter, r *http.Request) {
-			performValidation(webhook.Callback, w, r)
-		})
+	if err := registerAdmissionWebhook(admissionName, callbackHost, callbackPort, webhooks, caCert); err != nil {
+		return err
 	}
 	certFile, err := ioutil.TempFile("", "validating-webhook-*.crt")
 	if err != nil {
