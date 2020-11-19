@@ -153,7 +153,7 @@ func registerAdmissionWebhooks(admissionName, callbackHost string, callbackPort 
 				}
 			}
 		} else {
-			log.Println("could not list current validation webhooks: %v", err)
+			log.Printf("could not list current validation webhooks: %v\n", err)
 		}
 		_, err = clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Create(
 			context.TODO(),
