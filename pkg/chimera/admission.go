@@ -116,7 +116,7 @@ func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionName, cal
 	return res
 }
 
-func registerAdmissionWebhook(admissionName, callbackHost string, callbackPort int, webhooks WebhookList, caCertificate []byte) error {
+func registerAdmissionWebhooks(admissionName, callbackHost string, callbackPort int, webhooks WebhookList, caCertificate []byte) error {
 	config, err := config.GetConfig()
 	if err != nil {
 		return err
@@ -165,7 +165,7 @@ func StartServer(admissionName, callbackHost string, callbackPort int, webhooks 
 	if err != nil {
 		return errors.Errorf("failed to generate serving certificate: %v", err)
 	}
-	if err := registerAdmissionWebhook(admissionName, callbackHost, callbackPort, webhooks, caCert); err != nil {
+	if err := registerAdmissionWebhooks(admissionName, callbackHost, callbackPort, webhooks, caCert); err != nil {
 		return err
 	}
 	certFile, err := ioutil.TempFile("", "validating-webhook-*.crt")

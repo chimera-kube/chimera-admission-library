@@ -6,8 +6,8 @@ import (
 
 type WebhookResponse struct {
 	Allowed          bool
-	Code             *int32
-	RejectionMessage *string
+	Code             *int32  // +optional, ignored if allowed
+	RejectionMessage *string // +optional, ignored if allowed
 }
 
 func NewAllowRequest() WebhookResponse {
