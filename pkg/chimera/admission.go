@@ -17,6 +17,7 @@ import (
 
 	admissionv1 "k8s.io/api/admission/v1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -137,8 +138,22 @@ func registerAdmissionWebhooks(admissionName, callbackHost string, callbackPort 
 			admissionName,
 			metav1.DeleteOptions{},
 		)
-		if err != nil {
-			log.Printf("could not unregister webhook: %v", err)
+		if err != nil && !apierrors.IsNotFound(err) {
+			log.Printf("could not cleanup webhook prior to start: %v", err)
+		}
+		webhookList, err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().List(
+			context.TODO(),
+			metav1.ListOptions{},
+		)
+		if err == nil {
+			if len(webhookList.Items) != 0 {
+				log.Printf("WARNING: there are %d webhook(s) already registered besides this admission that could reject requests:\n", len(webhookList.Items))
+				for _, webhook := range webhookList.Items {
+					log.Printf("  - %s\n", webhook.ObjectMeta.Name)
+				}
+			}
+		} else {
+			log.Println("could not list current validation webhooks: %v", err)
 		}
 		_, err = clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Create(
 			context.TODO(),
@@ -146,6 +161,7 @@ func registerAdmissionWebhooks(admissionName, callbackHost string, callbackPort 
 			metav1.CreateOptions{},
 		)
 		if err == nil {
+			log.Printf("webhook for admission %q correctly installed -- %d hook(s) active for this admission", admissionName, len(webhooks))
 			break
 		}
 		log.Printf("could not register webhook: %v", err)
