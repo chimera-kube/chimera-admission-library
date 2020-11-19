@@ -83,7 +83,8 @@ func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionName, cal
 		Webhooks: []admissionregistrationv1.ValidatingWebhook{},
 	}
 	sideEffects := admissionregistrationv1.SideEffectClassNone
-	for i, webhook := range webhooks {
+	for i, _ := range webhooks {
+		webhook := webhooks[i]
 		webhookPath := webhook.Path
 		if webhookPath == "" {
 			webhookPath = generateValidatePath()
