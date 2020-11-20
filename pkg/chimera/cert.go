@@ -12,24 +12,50 @@ import (
 	"time"
 )
 
-func generateCert(ca []byte, ips []string, CAPrivateKey *rsa.PrivateKey) ([]byte, []byte, error) {
+func generateCert(ca []byte, host string, extraSANs []string, CAPrivateKey *rsa.PrivateKey) ([]byte, []byte, error) {
 	caCertificate, err := x509.ParseCertificate(ca)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	serialNumber, err := rand.Int(rand.Reader, (&big.Int{}).Exp(big.NewInt(2), big.NewInt(159), nil))
 	if err != nil {
 		return nil, nil, err
 	}
+
 	servingPrivateKey, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
 		return nil, nil, err
 	}
-	sansHosts := []string{"localhost"}
-	sansIps := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
-	for _, ip := range ips {
-		sansIps = append(sansIps, net.ParseIP(ip))
+
+	sansHosts := []string{}
+	sansIps := []net.IP{}
+
+	switch host {
+	case "localhost":
+		sansIps = []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
+		sansHosts = []string{host}
+	case "127.0.0.1":
+		sansIps = []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
+		sansHosts = []string{"localhost"}
+	default:
+		hostIp := net.ParseIP(host)
+		if hostIp != nil {
+			sansIps = []net.IP{hostIp}
+		} else {
+			sansHosts = []string{host}
+		}
 	}
+
+	for _, san := range extraSANs {
+		sanIp := net.ParseIP(san)
+		if sanIp == nil {
+			sansHosts = append(sansHosts, san)
+		} else {
+			sansIps = append(sansIps, sanIp)
+		}
+	}
+
 	newCertificate := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
