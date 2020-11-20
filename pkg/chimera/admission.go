@@ -174,6 +174,9 @@ func generateValidatePath() string {
 }
 
 func StartServer(admissionName, callbackHost string, callbackPort int, webhooks WebhookList) error {
+	if callbackHost == "" {
+		callbackHost = "127.0.0.1"
+	}
 	caCert, CAPrivateKey, err := generateCA()
 	if err != nil {
 		return errors.Errorf("failed to generate CA certificate: %v", err)
