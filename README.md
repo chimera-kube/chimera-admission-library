@@ -20,6 +20,5 @@ You need a `kubeconfig` file that has permissions to delete and create
 the `chimera` server from your program, `chimera` will look for your
 Kubernetes configuration using the following precedence rules:
 
-- (TODO) Provided `kubeconfig` path, if any
 - `KUBECONFIG` environment variable
 - `$HOME/.kube/config` if exists
