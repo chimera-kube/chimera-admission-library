@@ -1,4 +1,4 @@
-module github.com/chimera-kube/chimera
+module github.com/chimera-kube/chimera-admission-library
 
 go 1.15
 

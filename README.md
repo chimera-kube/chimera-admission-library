@@ -1,8 +1,8 @@
-# chimera
+# chimera-admission-library
 
-`chimera` is a library that allows you to trivially write admission
-webhooks that will self-register against a Kubernetes cluster,
-specially for testing purposes.
+`chimera-admission-library` is a library that allows you to trivially
+write admission webhooks that will self-register against a Kubernetes
+cluster, specially for testing purposes.
 
 Given you want to test some webhook logic, you can write a simple file
 that will start a webhook server calling to your declared callbacks,
