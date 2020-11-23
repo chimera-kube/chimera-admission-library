@@ -173,36 +173,106 @@ func generateValidatePath() string {
 	return fmt.Sprintf("/validate-%s", uuid.New().String())
 }
 
-func StartServer(admissionName, callbackHost string, callbackPort int, webhooks WebhookList) error {
-	if callbackHost == "" {
-		callbackHost = "127.0.0.1"
+type AdmissionConfig struct {
+	Name         string
+	CallbackHost string
+	CallbackPort int
+	Webhooks     WebhookList
+	TLSExtraSANs []string
+	CertFile     string
+	KeyFile      string
+	CaFile       string
+}
+
+func StartTLSServer(config AdmissionConfig) error {
+	callbackHost := "localhost"
+	if config.CallbackHost != "" {
+		callbackHost = config.CallbackHost
 	}
+
+	var caCertFile, certFile, keyFile string
+	if config.CertFile != "" && config.KeyFile != "" {
+		certFile = config.CertFile
+		keyFile = config.KeyFile
+		caCertFile = config.CaFile
+	} else {
+		var err error
+		caCertFile, certFile, keyFile, err = automaticCertGeneration(callbackHost, config.TLSExtraSANs)
+
+		if err != nil {
+			return err
+		}
+		defer os.Remove(caCertFile)
+		defer os.Remove(keyFile)
+		defer os.Remove(certFile)
+	}
+
+	caBundle, err := ioutil.ReadFile(caCertFile)
+	if err != nil {
+		return err
+	}
+
+	if err := registerAdmissionWebhooks(config.Name, callbackHost, config.CallbackPort, config.Webhooks, caBundle); err != nil {
+		return err
+	}
+
+	fmt.Printf("Starting TLS server on :%d - using key: %s, cert %s, CABundle %s\n",
+		config.CallbackPort, keyFile, certFile, caCertFile)
+
+	return http.ListenAndServeTLS(fmt.Sprintf(":%d", config.CallbackPort), certFile, keyFile, nil)
+}
+
+func automaticCertGeneration(callbackHost string, extraSANs []string) (string, string, string, error) {
 	caCert, CAPrivateKey, err := generateCA()
 	if err != nil {
-		return errors.Errorf("failed to generate CA certificate: %v", err)
+		return "", "", "", errors.Errorf("failed to generate CA certificate: %v", err)
 	}
-	servingCert, servingKey, err := generateCert(caCert, []string{callbackHost}, CAPrivateKey.Key())
+
+	servingCert, servingKey, err := generateCert(
+		caCert,
+		callbackHost,
+		extraSANs,
+		CAPrivateKey.Key())
 	if err != nil {
-		return errors.Errorf("failed to generate serving certificate: %v", err)
+		return "", "", "", errors.Errorf("failed to generate serving certificate: %v", err)
 	}
-	if err := registerAdmissionWebhooks(admissionName, callbackHost, callbackPort, webhooks, caCert); err != nil {
-		return err
+
+	caCertFile, err := ioutil.TempFile("", "validating-webhook-ca*.crt")
+	if err != nil {
+		return "", "", "", err
 	}
 	certFile, err := ioutil.TempFile("", "validating-webhook-*.crt")
 	if err != nil {
-		return err
+		defer os.Remove(caCertFile.Name())
+		return "", "", "", err
 	}
 	keyFile, err := ioutil.TempFile("", "validating-webhook-*.key")
 	if err != nil {
-		return err
+		defer os.Remove(caCertFile.Name())
+		defer os.Remove(certFile.Name())
+		return "", "", "", err
 	}
-	defer os.Remove(keyFile.Name())
-	defer os.Remove(certFile.Name())
+
+	if err := ioutil.WriteFile(caCertFile.Name(), caCert, 0644); err != nil {
+		defer os.Remove(caCertFile.Name())
+		defer os.Remove(certFile.Name())
+		defer os.Remove(keyFile.Name())
+		return "", "", "", err
+	}
+
 	if err := ioutil.WriteFile(certFile.Name(), servingCert, 0644); err != nil {
-		return err
+		defer os.Remove(caCertFile.Name())
+		defer os.Remove(certFile.Name())
+		defer os.Remove(keyFile.Name())
+		return "", "", "", err
 	}
 	if err := ioutil.WriteFile(keyFile.Name(), servingKey, 0600); err != nil {
-		return err
+		defer os.Remove(caCertFile.Name())
+		defer os.Remove(certFile.Name())
+		defer os.Remove(keyFile.Name())
+		return "", "", "", err
 	}
-	return http.ListenAndServeTLS(fmt.Sprintf(":%d", callbackPort), certFile.Name(), keyFile.Name(), nil)
+
+	return caCertFile.Name(), certFile.Name(), keyFile.Name(), nil
+
 }
