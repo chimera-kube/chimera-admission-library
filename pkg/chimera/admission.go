@@ -20,7 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	kubeclient "sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
 type WebhookCallback func(*admissionv1.AdmissionRequest) (WebhookResponse, error)
@@ -77,35 +77,50 @@ func performValidation(callback WebhookCallback, w http.ResponseWriter, r *http.
 	w.Write(marshaledAdmissionReview)
 }
 
-func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionName, callbackHost string, callbackPort int, caBundle []byte) admissionregistrationv1.ValidatingWebhookConfiguration {
+func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionConfig AdmissionConfig, caBundle []byte) admissionregistrationv1.ValidatingWebhookConfiguration {
 	res := admissionregistrationv1.ValidatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: admissionName,
+			Name: admissionConfig.Name,
 		},
 		Webhooks: []admissionregistrationv1.ValidatingWebhook{},
 	}
 	sideEffects := admissionregistrationv1.SideEffectClassNone
-	for i := 0; i < len(webhooks); i++ {
-		webhook := webhooks[i]
+	for i := 0; i < len(admissionConfig.Webhooks); i++ {
+		webhook := admissionConfig.Webhooks[i]
 		webhookPath := webhook.Path
 		if webhookPath == "" {
 			webhookPath = generateValidatePath()
 		}
 		admissionCallbackURL := url.URL{
 			Scheme: "https",
-			Host:   net.JoinHostPort(callbackHost, strconv.Itoa(callbackPort)),
-			Path:   webhookPath,
+			Host: net.JoinHostPort(
+				admissionConfig.CallbackHost,
+				strconv.Itoa(admissionConfig.CallbackPort)),
+			Path: webhookPath,
 		}
 		http.HandleFunc(webhookPath, func(w http.ResponseWriter, r *http.Request) {
 			performValidation(webhook.Callback, w, r)
 		})
 		admissionCallback := admissionCallbackURL.String()
+
+		clientConfig := admissionregistrationv1.WebhookClientConfig{
+			CABundle: caBundle,
+		}
+		if admissionConfig.KubeNamespace != "" && admissionConfig.KubeService != "" {
+			port := int32(admissionConfig.CallbackPort)
+			clientConfig.Service = &admissionregistrationv1.ServiceReference{
+				Namespace: admissionConfig.KubeNamespace,
+				Name:      admissionConfig.KubeService,
+				Path:      &webhookPath,
+				Port:      &port,
+			}
+		} else {
+			clientConfig.URL = &admissionCallback
+		}
+
 		validatingWebhook := admissionregistrationv1.ValidatingWebhook{
-			Name: webhook.Name,
-			ClientConfig: admissionregistrationv1.WebhookClientConfig{
-				URL:      &admissionCallback,
-				CABundle: caBundle,
-			},
+			Name:                    webhook.Name,
+			ClientConfig:            clientConfig,
 			Rules:                   webhook.Rules,
 			SideEffects:             &sideEffects,
 			AdmissionReviewVersions: []string{"v1"},
@@ -114,18 +129,21 @@ func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionName, cal
 		if validatingWebhook.Name == "" {
 			validatingWebhook.Name = fmt.Sprintf("rule-%d", i)
 		}
-		validatingWebhook.Name = fmt.Sprintf("%s.%s", validatingWebhook.Name, admissionName)
+		validatingWebhook.Name = fmt.Sprintf(
+			"%s.%s",
+			validatingWebhook.Name,
+			admissionConfig.Name)
 		res.Webhooks = append(res.Webhooks, validatingWebhook)
 	}
 	return res
 }
 
-func registerAdmissionWebhooks(admissionName, callbackHost string, callbackPort int, webhooks WebhookList, caCertificate []byte) error {
-	config, err := config.GetConfig()
+func registerAdmissionWebhooks(admissionConfig AdmissionConfig, caCertificate []byte) error {
+	kubeCfg, err := kubeclient.GetConfig()
 	if err != nil {
 		return err
 	}
-	clientset, err := kubernetes.NewForConfig(config)
+	clientset, err := kubernetes.NewForConfig(kubeCfg)
 	if err != nil {
 		return err
 	}
@@ -133,11 +151,11 @@ func registerAdmissionWebhooks(admissionName, callbackHost string, callbackPort 
 	if err != nil {
 		return err
 	}
-	admissionConfig := webhooks.asValidatingAdmissionRegistration(admissionName, callbackHost, callbackPort, caBundle)
+	webhookCfg := admissionConfig.Webhooks.asValidatingAdmissionRegistration(admissionConfig, caBundle)
 	for {
 		err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Delete(
 			context.TODO(),
-			admissionName,
+			admissionConfig.Name,
 			metav1.DeleteOptions{},
 		)
 		if err != nil && !apierrors.IsNotFound(err) {
@@ -159,11 +177,14 @@ func registerAdmissionWebhooks(admissionName, callbackHost string, callbackPort 
 		}
 		_, err = clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Create(
 			context.TODO(),
-			&admissionConfig,
+			&webhookCfg,
 			metav1.CreateOptions{},
 		)
 		if err == nil {
-			log.Printf("webhook for admission %q correctly installed -- %d hook(s) active for this admission", admissionName, len(webhooks))
+			log.Printf(
+				"webhook for admission %q correctly installed -- %d hook(s) active for this admission",
+				admissionConfig.Name,
+				len(admissionConfig.Webhooks))
 			break
 		}
 		log.Printf("could not register webhook: %v", err)
@@ -176,20 +197,21 @@ func generateValidatePath() string {
 }
 
 type AdmissionConfig struct {
-	Name         string
-	CallbackHost string
-	CallbackPort int
-	Webhooks     WebhookList
-	TLSExtraSANs []string
-	CertFile     string
-	KeyFile      string
-	CaFile       string
+	Name          string
+	KubeNamespace string
+	KubeService   string
+	CallbackHost  string
+	CallbackPort  int
+	Webhooks      WebhookList
+	TLSExtraSANs  []string
+	CertFile      string
+	KeyFile       string
+	CaFile        string
 }
 
 func StartTLSServer(config AdmissionConfig) error {
-	callbackHost := "localhost"
-	if config.CallbackHost != "" {
-		callbackHost = config.CallbackHost
+	if config.CallbackHost == "" {
+		config.CallbackHost = "localhost"
 	}
 
 	var caCertFile, certFile, keyFile string
@@ -199,7 +221,9 @@ func StartTLSServer(config AdmissionConfig) error {
 		caCertFile = config.CaFile
 	} else {
 		var err error
-		caCertFile, certFile, keyFile, err = automaticCertGeneration(callbackHost, config.TLSExtraSANs)
+		caCertFile, certFile, keyFile, err = automaticCertGeneration(
+			config.CallbackHost,
+			config.TLSExtraSANs)
 
 		if err != nil {
 			return err
@@ -214,7 +238,7 @@ func StartTLSServer(config AdmissionConfig) error {
 		return err
 	}
 
-	if err := registerAdmissionWebhooks(config.Name, callbackHost, config.CallbackPort, config.Webhooks, caBundle); err != nil {
+	if err := registerAdmissionWebhooks(config, caBundle); err != nil {
 		return err
 	}
 
