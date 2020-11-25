@@ -28,9 +28,9 @@ type WebhookCallback func(*admissionv1.AdmissionRequest) (WebhookResponse, error
 type Webhook struct {
 	Rules         []admissionregistrationv1.RuleWithOperations
 	Callback      WebhookCallback
-	FailurePolicy admissionregistrationv1.FailurePolicyType
-	Name          string // +optional
-	Path          string // +optional
+	FailurePolicy admissionregistrationv1.FailurePolicyType // +optional
+	Name          string                                    // +optional
+	Path          string                                    // +optional
 }
 
 type WebhookList []Webhook
@@ -124,10 +124,14 @@ func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionConfig Ad
 			Rules:                   webhook.Rules,
 			SideEffects:             &sideEffects,
 			AdmissionReviewVersions: []string{"v1"},
-			FailurePolicy:           &webhook.FailurePolicy,
 		}
 		if validatingWebhook.Name == "" {
 			validatingWebhook.Name = fmt.Sprintf("rule-%d", i)
+		}
+		if webhook.FailurePolicy == "" {
+			validatingWebhook.FailurePolicy = nil
+		} else {
+			validatingWebhook.FailurePolicy = &webhook.FailurePolicy
 		}
 		validatingWebhook.Name = fmt.Sprintf(
 			"%s.%s",
