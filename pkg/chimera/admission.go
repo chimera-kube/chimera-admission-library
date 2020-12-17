@@ -201,16 +201,17 @@ func generateValidatePath() string {
 }
 
 type AdmissionConfig struct {
-	Name          string
-	KubeNamespace string
-	KubeService   string
-	CallbackHost  string
-	CallbackPort  int
-	Webhooks      WebhookList
-	TLSExtraSANs  []string
-	CertFile      string
-	KeyFile       string
-	CaFile        string
+	Name                      string
+	KubeNamespace             string
+	KubeService               string
+	CallbackHost              string
+	CallbackPort              int
+	Webhooks                  WebhookList
+	TLSExtraSANs              []string
+	CertFile                  string
+	KeyFile                   string
+	CaFile                    string
+	SkipAdmissionRegistration bool
 }
 
 func StartTLSServer(config AdmissionConfig) error {
@@ -242,8 +243,10 @@ func StartTLSServer(config AdmissionConfig) error {
 		return err
 	}
 
-	if err := registerAdmissionWebhooks(config, caBundle); err != nil {
-		return err
+	if !config.SkipAdmissionRegistration {
+		if err := registerAdmissionWebhooks(config, caBundle); err != nil {
+			return err
+		}
 	}
 
 	fmt.Printf("Starting TLS server on :%d - using key: %s, cert %s, CABundle %s\n",
