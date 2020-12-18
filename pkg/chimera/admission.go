@@ -77,7 +77,7 @@ func performValidation(callback WebhookCallback, w http.ResponseWriter, r *http.
 	w.Write(marshaledAdmissionReview)
 }
 
-func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionConfig AdmissionConfig, caBundle []byte) admissionregistrationv1.ValidatingWebhookConfiguration {
+func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionConfig *AdmissionConfig, caBundle []byte) admissionregistrationv1.ValidatingWebhookConfiguration {
 	res := admissionregistrationv1.ValidatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: admissionConfig.Name,
@@ -88,19 +88,13 @@ func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionConfig Ad
 	for i := 0; i < len(admissionConfig.Webhooks); i++ {
 		webhook := admissionConfig.Webhooks[i]
 		webhookPath := webhook.Path
-		if webhookPath == "" {
-			webhookPath = generateValidatePath()
-		}
 		admissionCallbackURL := url.URL{
 			Scheme: "https",
 			Host: net.JoinHostPort(
 				admissionConfig.CallbackHost,
 				strconv.Itoa(admissionConfig.CallbackPort)),
-			Path: webhookPath,
+			Path: webhook.Path,
 		}
-		http.HandleFunc(webhookPath, func(w http.ResponseWriter, r *http.Request) {
-			performValidation(webhook.Callback, w, r)
-		})
 		admissionCallback := admissionCallbackURL.String()
 
 		clientConfig := admissionregistrationv1.WebhookClientConfig{
@@ -142,7 +136,18 @@ func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionConfig Ad
 	return res
 }
 
-func registerAdmissionWebhooks(admissionConfig AdmissionConfig, caCertificate []byte) error {
+func setupAdmissionWebhooks(admissionConfig *AdmissionConfig) {
+	for _, webhook := range admissionConfig.Webhooks {
+		if webhook.Path == "" {
+			webhook.Path = generateValidatePath()
+		}
+		http.HandleFunc(webhook.Path, func(w http.ResponseWriter, r *http.Request) {
+			performValidation(webhook.Callback, w, r)
+		})
+	}
+}
+
+func registerAdmissionWebhooks(admissionConfig *AdmissionConfig, caCertificate []byte) error {
 	kubeCfg, err := kubeclient.GetConfig()
 	if err != nil {
 		return err
@@ -214,7 +219,7 @@ type AdmissionConfig struct {
 	SkipAdmissionRegistration bool
 }
 
-func StartTLSServer(config AdmissionConfig) error {
+func StartTLSServer(config *AdmissionConfig) error {
 	if config.CallbackHost == "" {
 		config.CallbackHost = "localhost"
 	}
@@ -238,12 +243,13 @@ func StartTLSServer(config AdmissionConfig) error {
 		defer os.Remove(certFile)
 	}
 
-	caBundle, err := ioutil.ReadFile(caCertFile)
-	if err != nil {
-		return err
-	}
+	setupAdmissionWebhooks(config)
 
 	if !config.SkipAdmissionRegistration {
+		caBundle, err := ioutil.ReadFile(caCertFile)
+		if err != nil {
+			return err
+		}
 		if err := registerAdmissionWebhooks(config, caBundle); err != nil {
 			return err
 		}
