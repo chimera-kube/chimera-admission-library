@@ -233,7 +233,7 @@ type AdmissionConfig struct {
 	Log                       Logger
 }
 
-func StartTLSServer(config *AdmissionConfig) error {
+func StartServer(config *AdmissionConfig, insecure bool) error {
 	if config.CallbackHost == "" {
 		config.CallbackHost = "localhost"
 	}
@@ -269,10 +269,15 @@ func StartTLSServer(config *AdmissionConfig) error {
 		}
 	}
 
-	fmt.Printf("Starting TLS server on :%d - using key: %s, cert %s, CABundle %s\n",
-		config.CallbackPort, keyFile, certFile, caCertFile)
+	if insecure {
+		fmt.Printf("Starting HTTP server on :%d\n", config.CallbackPort)
+		return http.ListenAndServe(fmt.Sprintf(":%d", config.CallbackPort), nil)
+	} else {
+		fmt.Printf("Starting TLS server on :%d - using key: %s, cert %s, CABundle %s\n",
+			config.CallbackPort, keyFile, certFile, caCertFile)
 
-	return http.ListenAndServeTLS(fmt.Sprintf(":%d", config.CallbackPort), certFile, keyFile, nil)
+		return http.ListenAndServeTLS(fmt.Sprintf(":%d", config.CallbackPort), certFile, keyFile, nil)
+	}
 }
 
 func automaticCertGeneration(callbackHost string, extraSANs []string) (string, string, string, error) {
