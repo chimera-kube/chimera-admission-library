@@ -71,8 +71,8 @@ func performValidation(callback WebhookCallback, log Logger, w http.ResponseWrit
 		return
 	}
 	log.Debugf("Validation response: %s", string(marshaledAdmissionReview))
-	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledAdmissionReview)
 }
 
