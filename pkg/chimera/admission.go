@@ -64,16 +64,18 @@ func performValidation(callback WebhookCallback, log Logger, w http.ResponseWrit
 	if webhookResponse.RejectionMessage != nil {
 		admissionResponse.Result.Message = *webhookResponse.RejectionMessage
 	}
-	admissionReview.Response = &admissionResponse
-	marshaledAdmissionReview, err := json.Marshal(admissionReview)
+	admissionReviewResponse := admissionv1.AdmissionReview{
+		TypeMeta: admissionReview.TypeMeta,
+		Response: &admissionResponse}
+	marshaledResponse, err := json.Marshal(admissionReviewResponse)
 	if err != nil {
 		internalServerError(log, w, err)
 		return
 	}
-	log.Debugf("Validation response: %s", string(marshaledAdmissionReview))
+	log.Debugf("Validation response: %s", string(marshaledResponse))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(marshaledAdmissionReview)
+	w.Write(marshaledResponse)
 }
 
 func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionConfig *AdmissionConfig, caBundle []byte) admissionregistrationv1.ValidatingWebhookConfiguration {
