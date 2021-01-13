@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -35,23 +34,23 @@ type Webhook struct {
 
 type WebhookList []Webhook
 
-func internalServerError(w http.ResponseWriter, err error) {
+func internalServerError(log Logger, w http.ResponseWriter, err error) {
+	log.Errorf("Internal server error: %v", err)
 	w.WriteHeader(http.StatusInternalServerError)
-	log.Printf(">>> (500) %v\n", err)
 }
 
-func performValidation(callback WebhookCallback, w http.ResponseWriter, r *http.Request) {
+func performValidation(callback WebhookCallback, log Logger, w http.ResponseWriter, r *http.Request) {
 	body, _ := ioutil.ReadAll(r.Body)
-	log.Printf("<<< %s", string(body))
+	log.Debugf("Validating request: %s", string(body))
 	admissionReview := admissionv1.AdmissionReview{}
 	err := json.Unmarshal(body, &admissionReview)
 	if err != nil {
-		internalServerError(w, err)
+		internalServerError(log, w, err)
 		return
 	}
 	webhookResponse, err := callback(admissionReview.Request)
 	if err != nil {
-		internalServerError(w, err)
+		internalServerError(log, w, err)
 		return
 	}
 	admissionResponse := admissionv1.AdmissionResponse{
@@ -68,10 +67,10 @@ func performValidation(callback WebhookCallback, w http.ResponseWriter, r *http.
 	admissionReview.Response = &admissionResponse
 	marshaledAdmissionReview, err := json.Marshal(admissionReview)
 	if err != nil {
-		internalServerError(w, err)
+		internalServerError(log, w, err)
 		return
 	}
-	log.Printf(">>> (200) %s", string(marshaledAdmissionReview))
+	log.Debugf("Validation response: %s", string(marshaledAdmissionReview))
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(marshaledAdmissionReview)
@@ -137,17 +136,31 @@ func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionConfig *A
 }
 
 func setupAdmissionWebhooks(admissionConfig *AdmissionConfig) {
+	var log Logger
+	if admissionConfig.Log == nil {
+		log = &simpleLogger{}
+	} else {
+		log = admissionConfig.Log
+	}
+
 	for _, webhook := range admissionConfig.Webhooks {
 		if webhook.Path == "" {
 			webhook.Path = generateValidatePath()
 		}
 		http.HandleFunc(webhook.Path, func(w http.ResponseWriter, r *http.Request) {
-			performValidation(webhook.Callback, w, r)
+			performValidation(webhook.Callback, log, w, r)
 		})
 	}
 }
 
 func registerAdmissionWebhooks(admissionConfig *AdmissionConfig, caCertificate []byte) error {
+	var log Logger
+	if admissionConfig.Log == nil {
+		log = &simpleLogger{}
+	} else {
+		log = admissionConfig.Log
+	}
+
 	kubeCfg, err := kubeclient.GetConfig()
 	if err != nil {
 		return err
@@ -168,7 +181,7 @@ func registerAdmissionWebhooks(admissionConfig *AdmissionConfig, caCertificate [
 			metav1.DeleteOptions{},
 		)
 		if err != nil && !apierrors.IsNotFound(err) {
-			log.Printf("could not cleanup webhook prior to start: %v", err)
+			log.Errorf("Could not cleanup webhook prior to start: %v", err)
 		}
 		webhookList, err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().List(
 			context.TODO(),
@@ -176,13 +189,13 @@ func registerAdmissionWebhooks(admissionConfig *AdmissionConfig, caCertificate [
 		)
 		if err == nil {
 			if len(webhookList.Items) != 0 {
-				log.Printf("WARNING: there are %d webhook(s) already registered besides this admission that could reject requests:\n", len(webhookList.Items))
+				log.Infof("WARNING: there are %d webhook(s) already registered besides this admission that could reject requests:\n", len(webhookList.Items))
 				for _, webhook := range webhookList.Items {
-					log.Printf("  - %s\n", webhook.ObjectMeta.Name)
+					log.Debugf("  - %s\n", webhook.ObjectMeta.Name)
 				}
 			}
 		} else {
-			log.Printf("could not list current validation webhooks: %v\n", err)
+			log.Errorf("Could not list current validation webhooks: %v\n", err)
 		}
 		_, err = clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Create(
 			context.TODO(),
@@ -190,13 +203,13 @@ func registerAdmissionWebhooks(admissionConfig *AdmissionConfig, caCertificate [
 			metav1.CreateOptions{},
 		)
 		if err == nil {
-			log.Printf(
+			log.Infof(
 				"webhook for admission %q correctly installed -- %d hook(s) active for this admission",
 				admissionConfig.Name,
 				len(admissionConfig.Webhooks))
 			break
 		}
-		log.Printf("could not register webhook: %v", err)
+		log.Errorf("could not register webhook: %v", err)
 	}
 	return nil
 }
@@ -217,6 +230,7 @@ type AdmissionConfig struct {
 	KeyFile                   string
 	CaFile                    string
 	SkipAdmissionRegistration bool
+	Log                       Logger
 }
 
 func StartTLSServer(config *AdmissionConfig) error {
