@@ -93,7 +93,7 @@ func performValidation(callback WebhookCallback, log Logger, w http.ResponseWrit
 	log.Debugf("Validation response: %s", string(marshaledResponse))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(marshaledResponse)
+	_, _ = w.Write(marshaledResponse)
 }
 
 func (webhooks WebhookList) asValidatingAdmissionRegistration(admissionConfig *AdmissionConfig, caBundle []byte) admissionregistrationv1.ValidatingWebhookConfiguration {
