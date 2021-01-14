@@ -34,6 +34,11 @@ type Webhook struct {
 
 type WebhookList []Webhook
 
+func clientError(log Logger, w http.ResponseWriter, statusCode int, err error) {
+	log.Infof("Client error (%d): %v", statusCode, err)
+	w.WriteHeader(statusCode)
+}
+
 func internalServerError(log Logger, w http.ResponseWriter, err error) {
 	log.Errorf("Internal server error: %v", err)
 	w.WriteHeader(http.StatusInternalServerError)
@@ -41,11 +46,24 @@ func internalServerError(log Logger, w http.ResponseWriter, err error) {
 
 func performValidation(callback WebhookCallback, log Logger, w http.ResponseWriter, r *http.Request) {
 	body, _ := ioutil.ReadAll(r.Body)
+	if len(body) == 0 {
+		clientError(log, w, http.StatusBadRequest, fmt.Errorf("empty body"))
+		return
+	}
 	log.Debugf("Validating request: %s", string(body))
+	contentType := r.Header.Get("Content-Type")
+	if contentType != "application/json" {
+		clientError(log, w, http.StatusUnsupportedMediaType, fmt.Errorf("expected application/json Content-Type"))
+		return
+	}
 	admissionReview := admissionv1.AdmissionReview{}
 	err := json.Unmarshal(body, &admissionReview)
 	if err != nil {
-		internalServerError(log, w, err)
+		clientError(log, w, http.StatusBadRequest, err)
+		return
+	}
+	if admissionReview.Request == nil {
+		clientError(log, w, http.StatusBadRequest, fmt.Errorf("invalid AdmissionReview request"))
 		return
 	}
 	webhookResponse, err := callback(admissionReview.Request)
