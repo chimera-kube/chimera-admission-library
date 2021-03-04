@@ -1,3 +1,5 @@
+> This project has been archived since we switched to the new [policy server](https://github.com/chimera-kube/policy-server)
+
 # chimera-admission-library
 
 `chimera-admission-library` is a library that allows you to trivially
